@@ -1,0 +1,387 @@
+import os
+import sys
+from pathlib import Path
+
+# Make sure emojis can be printed even when output is redirected
+# (e.g. to a file or through PowerShell), which on Windows defaults
+# to the cp1252 codec that cannot encode non-ASCII characters.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# Token taken from the existing Bot.py file
+TOKEN = "8907515179:AAG30jnqCtc9-ydQ458iUbS0pk2WRiMjqTs"
+
+
+# Folder that holds the documents.
+# Path is built from THIS file's location, so the bot works
+# no matter which folder you run "python DocumentBot.py" from.
+BASE_DIR = Path(__file__).resolve().parent
+
+FILES_DIR = BASE_DIR / "files"
+
+
+# Downloadable files
+# callback_data -> (file name, caption, type)
+DOCUMENTS = {
+    "timetable": (
+        "timetable.docx",
+        "📄 Here is your timetable.",
+        "document",
+    ),
+    "notes": (
+        "notes.docx",
+        "📄 Here are your notes.",
+        "document",
+    ),
+    "college_image": (
+        "college.jpg",
+        "🖼️ Here is the image.",
+        "photo",
+    ),
+}
+
+
+# ============================================================
+# KEYBOARDS
+# ============================================================
+
+def main_menu_keyboard():
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📚 Services",
+                callback_data="services"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📁 Documents",
+                callback_data="documents"
+            )
+        ],
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+def services_keyboard():
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📅 Book Service",
+                callback_data="book"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬅️ Back",
+                callback_data="back"
+            )
+        ],
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+def documents_keyboard():
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📄 Timetable",
+                callback_data="timetable"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📄 Notes",
+                callback_data="notes"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🖼️ College Image",
+                callback_data="college_image"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬅️ Back",
+                callback_data="back"
+            )
+        ],
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+# ============================================================
+# SAFE MESSAGE EDIT
+# ============================================================
+
+async def safe_edit(query, text, reply_markup=None):
+    """
+    Edits the message and ignores the
+    "Message is not modified" error that Telegram raises
+    when the same menu is opened twice.
+    """
+
+    try:
+
+        await query.edit_message_text(
+            text,
+            reply_markup=reply_markup
+        )
+
+    except BadRequest as error:
+
+        if "message is not modified" in str(error).lower():
+            return
+
+        raise
+
+
+# ============================================================
+# SEND A FILE
+# ============================================================
+
+async def send_file(query, key):
+
+    file_name, caption, file_type = DOCUMENTS[key]
+
+    file_path = FILES_DIR / file_name
+
+    # Check the file BEFORE sending it.
+    # Without this check Telegram treats the missing path
+    # as a file_id and raises "wrong file identifier".
+    if not file_path.is_file():
+
+        await query.message.reply_text(
+            "❌ File not found on the server.\n\n"
+            f"Expected location:\n{file_path}\n\n"
+            "Please contact the administrator."
+        )
+        return
+
+    try:
+
+        with file_path.open("rb") as file_handle:
+
+            if file_type == "photo":
+
+                await query.message.reply_photo(
+                    photo=file_handle,
+                    caption=caption
+                )
+
+            else:
+
+                await query.message.reply_document(
+                    document=file_handle,
+                    filename=file_name,
+                    caption=caption
+                )
+
+    except Exception as error:
+
+        print(f"ERROR while sending {file_name}: {error}")
+
+        await query.message.reply_text(
+            "❌ Sorry, the file could not be sent.\n\n"
+            "Please try again later."
+        )
+
+
+# ============================================================
+# /START
+# ============================================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text(
+        "👋 Welcome!\n\n"
+        "What would you like to do?",
+        reply_markup=main_menu_keyboard()
+    )
+
+
+# ============================================================
+# CALLBACK HANDLER
+# ============================================================
+
+async def button_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    # Always answer first, otherwise the button
+    # keeps showing the loading circle.
+    await query.answer()
+
+    data = query.data
+
+    # --------------------------------------------------------
+    # SERVICES
+    # --------------------------------------------------------
+
+    if data == "services":
+
+        await safe_edit(
+            query,
+            "🛠️ Available Services",
+            services_keyboard()
+        )
+
+    # --------------------------------------------------------
+    # BOOK SERVICE
+    # (this branch was missing in the original code,
+    #  so the button did nothing)
+    # --------------------------------------------------------
+
+    elif data == "book":
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "⬅️ Back",
+                    callback_data="services"
+                )
+            ]
+        ]
+
+        await safe_edit(
+            query,
+            "📅 Booking\n\n"
+            "Your booking request has been received.\n"
+            "Our team will contact you shortly.",
+            InlineKeyboardMarkup(keyboard)
+        )
+
+    # --------------------------------------------------------
+    # DOCUMENTS
+    # --------------------------------------------------------
+
+    elif data == "documents":
+
+        await safe_edit(
+            query,
+            "📁 Available Documents\n\n"
+            "Select a file to download:",
+            documents_keyboard()
+        )
+
+    # --------------------------------------------------------
+    # FILE DOWNLOAD
+    # --------------------------------------------------------
+
+    elif data in DOCUMENTS:
+
+        await send_file(query, data)
+
+    # --------------------------------------------------------
+    # BACK TO MAIN MENU
+    # --------------------------------------------------------
+
+    elif data == "back":
+
+        await safe_edit(
+            query,
+            "🏠 Main Menu",
+            main_menu_keyboard()
+        )
+
+    # --------------------------------------------------------
+    # UNKNOWN BUTTON
+    # --------------------------------------------------------
+
+    else:
+
+        await safe_edit(
+            query,
+            "❌ Unknown option.\n\n"
+            "Please use /start to begin again.",
+            main_menu_keyboard()
+        )
+
+
+# ============================================================
+# ERROR HANDLER
+# ============================================================
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    print(f"ERROR: {context.error}")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    if not TOKEN or TOKEN == "YOUR_BOT_TOKEN":
+
+        print(
+            "ERROR: Bot token is not set. "
+            "Please add a valid token."
+        )
+
+        return
+
+    # Make sure the files folder exists
+    os.makedirs(FILES_DIR, exist_ok=True)
+
+    application = (
+        Application.builder()
+        .token(TOKEN)
+        .build()
+    )
+
+    # /start command
+    application.add_handler(
+        CommandHandler("start", start)
+    )
+
+    # Inline button handler
+    application.add_handler(
+        CallbackQueryHandler(button_handler)
+    )
+
+    # Error handler
+    application.add_error_handler(error_handler)
+
+    print("🤖 Bot is running...")
+
+    application.run_polling()
+
+
+# ============================================================
+# RUN PROGRAM
+# ============================================================
+
+if __name__ == "__main__":
+    main()
